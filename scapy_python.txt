@@ -1,0 +1,366 @@
+Python Scapy
+
+Scapy является мощной программой интерактивной манипуляции пакетами на основе Python. За исключением некоторых коммерческих программ, очень немногие инструменты могут делать то, что способно выполнять Scapy, это я знаю точно. Основная разница состоит в том, что Scapy позволяет вам вручную обрабатывать ваши собственные пакеты на очень базовом уровне. Имеется возможность подделывать или декодировать сетевые пакеты. Давайте взглянем на этот инструмент.
+
+Установка Scapy
+
+На момент написания книги, Scapy 2.3.3 поддерживает Python 2.7.17 
+Хотя и были предприняты попутки и ответвления для поддержки Python 3, они всё ещё являются прототипами (по собственным словам Фила), поэтому мы будем применять Python 2.7 для своего случая. Основная идея в том, что Scapy 3 будет только для Python 3 и не будет обратной совместимости со Scapy 2.x.
+
+Ставим сам Scapy:
+
+admin1@admin1-VirtualBox:~$ sudo apt-get update
+admin1@admin1-VirtualBox:~$ sudo apt-get install git
+admin1@admin1-VirtualBox:~$ git clone https://github.com/secdev/scapy
+admin1@admin1-VirtualBox:~$ cd scapy/
+admin1@admin1-VirtualBox:~/scapy$ sudo python setup.py install
+		
+Вот быстрая проверка для того чтобы убедиться, что все пакеты установлены правильно:
+
+admin1@admin1-VirtualBox:~/scapy$ python
+Python 2.7.17 (default, Mar 30 2020)
+[GCC 7.5.0] on linux2
+Type "help", "copyright", "credits" or "license" for more information.
+>>> from scapy.all import *
+Пустой ответ значит что все ок.
+
+
+В своём первом примере мы поработаем с пакетом ICMP (Internet Control Message Protocol, Межсетевого протокола управляющих сообщений) на своём клиенте и отправим его на наш сервер. 
+На стороне самого сервера мы применим tcpdump в фильтре хоста для просмотра входящего пакета:
+
+
+## Сторона клиента
+admin1@admin1-VirtualBox:~/scapy$ sudo scapy
+<пропуск>
+Welcome to Scapy (2.3.3)
+>>> send(IP(dst="10.0.0.14")/ICMP())
+.
+Sent 1 packets.
+>>>
+
+## Сторона сервера
+webfront@server:~$ sudo tcpdump -i eth1 host 10.0.0.10
+tcpdump: verbose output suppressed, use -v or -vv for full protocol decode
+listening on eth1, link-type EN10MB (Ethernet), capture size 65535 bytes
+02:45:16.400162 IP 10.0.0.10 > 10.0.0.14: ICMP echo request, id 0, seq 0, length 8
+02:45:16.400192 IP 10.0.0.14 > 10.0.0.10: ICMP echo reply, id 0, seq 0, length 8
+		
+Как вы можете видеть, обработать вручную пакет очень просто. 
+Scapy позволяет вам построить сам уровень пакета при помощи символа слэша (/) в качестве необходимого разделителя. 
+Имеющаяся функция send работает на слое 3 уровня, который заботится для вас о маршрутизации и уровне 2. 
+Также имеется альтернатива sendp(), которая функционирует на 2 уровне, что означает, что вам потребуется определять сам интерфейс и протокол канального уровня.
+
+Давайте рассмотрим перехват самого возвращаемого пакета с применением имеющейся функции отправки запроса (sr, send-request). 
+Мы применяем особый вариант с названием sr1 этой функции, который возвращает только один пакет из отправляемого ответа на заданный пакет:
+
+
+>>> p = sr1(IP(dst="10.0.0.14")/ICMP())
+>>> p
+<IP version=4L ihl=5L tos=0x0 len=28 id=26713 flags= frag=0L ttl=62 proto=icmp chksum=0x71 src=10.0.0.14 dst=10.0.0.10 options=[] |<ICMPtype=echo-reply code=0 chksum=0xffff id=0x0 seq=0x0 |>>
+		
+Один момент, которые следует отметить, состоит в том, что сама функция sr возвращает кортеж, 
+содержащий ответный и безответный списки:
+
+>>> p = sr(IP(dst="10.0.0.14")/ICMP())
+>>> type(p)
+<type 'tuple'>
+
+## распаковка
+>>> ans,unans = sr(IP(dst="10.0.0.14")/ICMP())
+>>> type(ans)
+<class 'scapy.plist.SndRcvList'>
+>>> type(unans)
+<class 'scapy.plist.PacketList'>
+		
+Если вам необходимо только взглянуть на сам список паетов ответа, мы можем просмотреть его в другом кортеже, 
+содержащем те пакеты, которые мы должны отправить помимо самого возвращаемого пакета:
+
+
+>>> for i in ans:
+...     print(type(i))
+...
+<type 'tuple'>
+>>> for i in ans:
+...     print i
+...
+(<IP frag=0 proto=icmp dst=10.0.0.14 |<ICMP |>>, <IP version=4L ihl=5L tos=0x0 len=28 id=27062 flags= frag=0L ttl=62 proto=icmp chksum=0xff13 src=10.0.0.14 dst=10.0.0.10 options=[] |<ICMP type=echo-reply code=0 chksum=0xffff id=0x0 seq=0x0 |>>)
+		
+
+Scapy также предоставляет конструкцию уровня 7 помимо всего прочего, например, запрос к DNS. 
+В приводимом ниже примере мы опрашиваем некий открытый сервер DNS для разрешения www.google.com:
+
+>>> p =
+sr1(IP(dst="8.8.8.8")/UDP()/DNS(rd=1,qd=DNSQR(qname="www.google.com")))
+>>> p
+<IP version=4L ihl=5L tos=0x0 len=76 id=21743 flags= frag=0L ttl=128 proto=udp chksum=0x27fa src=8.8.8.8 dst=172.16.1.152 options=[] |<UDP sport=domain dport=domain len=56 chksum=0xc077 |<DNS id=0 qr=1L opcode=QUERY aa=0L tc=0L rd=1L ra=1L z=0L ad=0L cd=0L rcode=ok qdcount=1 ancount=1 nscount=0 arcount=0 qd=<DNSQR qname='www.google.com.' qtype=A qclass=IN |> an=<DNSRR rrname='www.google.com.' type=A rclass=IN ttl=299 rdata='172.217.3.164' |> ns=None ar=None |>>>
+>>>
+		
+Снифинг
+
+Scapy можно также применять для простого захвата пакетов:
+
+
+>>> a = sniff(filter="icmp and host 172.217.3.164", count=5)
+>>> a.show()
+0000 Ether / IP / TCP 192.168.225.146:ssh > 192.168.225.1:50862 PA / Raw
+0001 Ether / IP / ICMP 192.168.225.146 > 172.217.3.164 echo-request 0 / Raw
+0002 Ether / IP / ICMP 172.217.3.164 > 192.168.225.146 echo-reply 0 / Raw
+0003 Ether / IP / ICMP 192.168.225.146 > 172.217.3.164 echo-request 0 / Raw
+0004 Ether / IP / ICMP 172.217.3.164 > 192.168.225.146 echo-reply 0 / Raw
+>>>
+		
+Мы можем взглянуть на полученные пакеты более подробно, в том числе в сыром виде:
+
+
+>>> for i in a:
+... print i.show()
+...
+<пропуск>
+###[ Ethernet ]###
+ dst= <>
+ src= <>
+ type= 0x800
+###[ IP ]###
+ version= 4L
+ ihl= 5L
+ tos= 0x0
+ len= 84
+ id= 15714
+ flags= DF
+ frag= 0L
+ ttl= 64
+ proto= icmp
+ chksum= 0xaa8e
+ src= 192.168.225.146
+ dst= 172.217.3.164
+ options
+###[ ICMP ]###
+ type= echo-request
+ code= 0
+ chksum= 0xe1cf
+ id= 0xaa67
+ seq= 0x1
+###[ Raw ]###
+ load= 'xd6xbfxb1Xx00x00x00x00x1axdcnx00x00x00x00x00x10x11x12x13x14x15x16x17x18x19x1ax1bx1cx1dx1ex1f !"#$%&'()*+,-./01234567'
+None
+		
+Давайте продолжим и посмотрим как мы можем применять Scapy для некоторой общей проверки безопасности.
+
+Сканирование порта TCP
+
+Самым первым шагом для любых потенциального хакеров почти всегда является попытка изучить какие службы открыты в данной сетевой среде с тем, чтобы они могли сосредоточить свои усилия на определённой атаке. Конечно, нам необходимо открыть определённые порты чтобы обслуживать своих потребителей, однако нам также следует закрыть все открытые порты, которые не являются обязательными для снижения имеющегося риска. Мы можем воспользоваться Scapy для осуществления простого сканирования открытых портов.
+
+Мы можем отправить некий пакет SYN и посмотреть ответит ли определённый сервер с помощью SYN-ACK:
+
+
+>>> p = sr1(IP(dst="10.0.0.14")/TCP(sport=666,dport=23,flags="S"))
+>>> p.show()
+###[ IP ]###
+ version= 4L
+ ihl= 5L
+ tos= 0x0
+ len= 40
+ id= 25373
+ flags= DF
+ frag= 0L
+ ttl= 62
+ proto= tcp
+ chksum= 0xc59b
+ src= 10.0.0.14
+ dst= 10.0.0.10
+ options
+###[ TCP ]###
+ sport= telnet
+ dport= 666
+ seq= 0
+ ack= 1
+ dataofs= 5L
+ reserved= 0L
+ flags= RA
+ window= 0
+ chksum= 0x9907
+ urgptr= 0
+ options= {}
+		
+Отметим, что в приведённом здесь выводе определённый сервер отвечает RESET+ACK по порту TCP 23. Однако, порт TCP 22 открыт, тем самым возвращается SYN-ACK:
+
+
+>>> p = sr1(IP(dst="10.0.0.14")/TCP(sport=666,dport=22,flags="S"))
+>>> p.show()
+###[ IP ]###
+ version= 4L
+<пропуск>
+ proto= tcp
+ chksum= 0x28b5
+ src= 10.0.0.14
+ dst= 10.0.0.10
+ options
+###[ TCP ]###
+ sport= ssh
+ dport= 666
+<пропуск>
+ flags= SA
+<пропуск>
+		
+Мы также можем просканировать некий диапазон портов с 20 по 22; отметим, что мы применяем для отправки- приёма sr() вместо обычного sr1() отправить- принять- один- пакет:
+
+
+>>> ans,unans = sr(IP(dst="10.0.0.14")/TCP(sport=666,dport=(20,22),flags="S"))
+>>> for i in ans:
+...     print i
+...
+(<IP frag=0 proto=tcp dst=10.0.0.14 |<TCP sport=666 dport=ftp_data flags=S |>>, <IP version=4L ihl=5L tos=0x0 len=40 id=4126 flags=DF frag=0L ttl=62 proto=tcp chksum=0x189b src=10.0.0.14 dst=10.0.0.10 options=[] |<TCP sport=ftp_data dport=666 seq=0 ack=1 dataofs=5L reserved=0L flags=RA window=0 chksum=0x990a urgptr=0 |>>)
+(<IP frag=0 proto=tcp dst=10.0.0.14 |<TCP sport=666 dport=ftp flags=S |>>, <IP version=4L ihl=5L tos=0x0 len=40 id=4127 flags=DF frag=0L ttl=62 proto=tcp chksum=0x189a src=10.0.0.14 dst=10.0.0.10 options=[] |<TCP sport=ftp dport=666 seq=0 ack=1 dataofs=5L reserved=0L flags=RA window=0 chksum=0x9909 urgptr=0 |>>)
+(<IP frag=0 proto=tcp dst=10.0.0.14 |<TCP sport=666 dport=ssh flags=S |>>, <IP version=4L ihl=5L tos=0x0 len=44 id=0 flags=DF frag=0L ttl=62 proto=tcp chksum=0x28b5 src=10.0.0.14 dst=10.0.0.10 options=[] |<TCP sport=ssh dport=666 seq=4187384571 ack=1 dataofs=6L reserved=0L flags=SA window=29200 chksum=0xaaab urgptr=0 options=[('MSS', 1460)] |>>)
+>>>
+		
+Мы также можем определить некую сеть назначения вместо отдельного хоста. Как вы можете видеть из имеющегося блока 10.0.0.8/29 , хосты 10.0.0.9, 10.0.0.13 и 10.0.0.14 возвращаются с SA, что соответствует двум имеющимся сетевым устройствам и одному хосту:
+
+
+>>> ans,unans = sr(IP(dst="10.0.0.8/29")/TCP(sport=666,dport=(22),flags="S"))
+>>> for i in ans:
+...     print(i)
+...
+(<IP frag=0 proto=tcp dst=10.0.0.9 |<TCP sport=666 dport=ssh flags=S |>>, <IP version=4L ihl=5L tos=0x0 len=44 id=7304 flags= frag=0L ttl=64 proto=tcp chksum=0x4a32 src=10.0.0.9 dst=10.0.0.10 options=[] |<TCP sport=ssh dport=666 seq=541401209 ack=1 dataofs=6L reserved=0L flags=SA window=17292 chksum=0xfd18 urgptr=0 options=[('MSS', 1444)] |>>)
+(<IP frag=0 proto=tcp dst=10.0.0.14 |<TCP sport=666 dport=ssh flags=S |>>, <IP version=4L ihl=5L tos=0x0 len=44 id=0 flags=DF frag=0L ttl=62 proto=tcp chksum=0x28b5 src=10.0.0.14 dst=10.0.0.10 options=[] |<TCP sport=ssh dport=666 seq=4222593330 ack=1 dataofs=6L reserved=0L flags=SA window=29200 chksum=0x6a5b urgptr=0 options=[('MSS', 1460)] |>>)
+(<IP frag=0 proto=tcp dst=10.0.0.13 |<TCP sport=666 dport=ssh flags=S |>>, <IP version=4L ihl=5L tos=0x0 len=44 id=41992 flags= frag=0L ttl=254 proto=tcp chksum=0x4ad src=10.0.0.13 dst=10.0.0.10 options=[] |<TCP sport=ssh dport=666 seq=2167267659 ack=1 dataofs=6L reserved=0L flags=SA window=4128 chksum=0x1252 urgptr=0 options=[('MSS', 536)] |>>)
+		
+Основываясь на том, что мы изучили на данный момент, мы можем сделать некий простой сценарий для многократного применения, scapy_tcp_scan_1.py. Мы начнём с предложенного импорта Scapy и модуля sys для получения аргументов:
+
+
+#!/usr/bin/env python2
+
+from scapy.all import *
+import sys
+		
+Наша функция tcp_scan() аналогична тому, что мы видели ранее до этого момента:
+
+def tcp_scan(destination, dport):
+    ans, unans = sr(IP(dst=destination)/TCP(sport=666,dport=dport,flags="S"))
+    for sending, returned in ans:
+        if 'SA' in str(returned[TCP].flags):
+            return destination + " port " + str(sending[TCP].dport) + "is open"
+        else:
+            return destination + " port " + str(sending[TCP].dport) + "is not open"
+		
+Затем мы можем достать ввод из аргументов, а потом вызвать свою функцию tcp_scan() из main():
+
+def main():
+    destination = sys.argv[1]
+    port = int(sys.argv[2])
+    scan_result = tcp_scan(destination, port)
+    print(scan_result)
+
+if __name__ == "__main__":
+    main()
+		
+
+Помните, что для Scapy необходим доступ с правами root, таким образом нашему сценарию понадобится исполнение в виде sudo:
+
+Полный вариант кода:
+
+#!/usr/bin/env python2
+
+from scapy.all import *
+import sys
+
+def tcp_scan(destination, dport):
+    ans, unans = sr(IP(dst=destination)/TCP(sport=777,dport=dport,flags="S"))
+    for sending, returned in ans:
+        if `18` in str(returned[TCP].flags):
+            return destination + " port " + str(sending[TCP].dport) + "is open"
+        else:
+            return destination + " port " + str(sending[TCP].dport) + "is not open"
+
+def main():
+    destination = sys.argv[1]
+    port = int(sys.argv[2])
+    scan_result = tcp_scan(destination, port)
+    print(scan_result)
+
+if __name__ == "__main__":
+    main()
+
+
+admin1@admin1-VirtualBox:~$ sudo python scapy_tcp_scan.py "10.0.0.14" 23
+<пропуск>
+10.0.0.14 port 23 is not open
+admin1@admin1-VirtualBox:~$ sudo python scapy_tcp_scan.py "10.0.0.14" 22
+<пропуск>
+10.0.0.14 port 22 is open
+		
+Это относительно длинный пример нашего сканирования TCP, который демонстрирует значительную мощность обработки вручную ваших собственных пакетов с помощью Scapy. Он выполняет в определённом интерактивном режиме, а затем завершается использованием некоего простого сценария. Давайте рассмотрим некоторые дополнительные примеры использования Scapy для проверки безопасности.
+
+Сборка ping
+
+Давайте предположим, что наша сетевая среда содержит некий замес машин Windows, Unix и Linux, причём пользователи добавляют свои собственные BYOD (Bring Your Own Device, Приветствуются собственные устройства); они могут поддерживать, а могут и нет ping ICMP. Сейчас мы сконструируем некий файл с тремя типами обычного ping для своей сетевой среды, а именно ping ICMP, TCP и UDP в scapy_ping_collection.py:
+
+
+#!/usr/bin/env python2
+from scapy.all import *
+
+def icmp_ping(destination):
+# обычный ICMP ping
+    ans, unans = sr(IP(dst=destination)/ICMP())
+    return ans
+
+def tcp_ping(destination, dport):
+# Сканирование TCP SYN
+    ans, unans = sr(IP(dst=destination)/TCP(dport=dport,flags="S"))
+    return ans
+
+def udp_ping(destination):
+# Ошибка недоступности порта ICMP для закрытого порта
+    ans, unans = sr(IP(dst=destination)/UDP(dport=0))
+    return ans
+ 	   
+В данном примере мы также применим summary() и sprintf() для своего вывода:
+
+def answer_summary(answer_list):
+ # Пример лямбда с удобной печатью
+    answer_list.summary(lambda(s, r): r.sprintf("%IP.src% is alive"))
+ 	   
+Затем мы можем исполнить все три типа ping в имеющейся сетевой среде в одном сценарии:
+
+def main():
+    print("** ICMP Ping **")
+    ans = icmp_ping("10.0.0.13-14")
+    answer_summary(ans)
+    print("** TCP Ping **")
+    ans = tcp_ping("10.0.0.13", 22)
+    answer_summary(ans)
+    print("** UDP Ping **")
+    ans = udp_ping("10.0.0.13-14")
+    answer_summary(ans)
+
+if __name__ == "__main__":
+    main()
+ 	   
+На данном этапе, как я надеюсь, вы согласитесь со мной в том, что, имея возможность создавать свой собственный пакет, вы можете отвечать за тот тип операций и проверок, которые вы бы желали запустить.
+
+Обычные атаки
+
+В этом примере использования Scapy давайте рассмотрим как мы можем построить свой пакет для проведения некоторых видов атак, таких как Ping of Death (Ping смерти) и LAND Attack (Отказ в обслуживании LAN). Иногда вы вначале вы первоначально платите за некое коммерческое программное обеспечение для тестирования проникновения. С помощью Scapy вы сможете проводить собственную проверку, сопровождаемую полным контролем помимо добавления дополнительных тестов в последующем.
+
+Самая первая атака в основном отправляет определённому хосту получателя некий поддельный заголовок IP, например, с длиной 2 и версией IP 3:
+
+
+def malformed_packet_attack(host):
+    send(IP(dst=host, ihl=2, version=3)/ICMP())
+ 	   
+Атака Ping of Death заключается в постоянной отправке пакета ICMP с полезной нагрузкой, превышающей 65 535 байт:
+
+
+def ping_of_death_attack(host):
+    # https://en.wikipedia.org/wiki/Ping_of_death
+    send(fragment(IP(dst=host)/ICMP()/("X"*60000)))
+ 	   
+Атака LAND Attack желает перенаправлять все отклики клиента обратно самому этому клиенту и исчерпывает имеющиеся у данного хоста ресурсы:
+
+
+def land_attack(host):
+    # https://en.wikipedia.org/wiki/Denial-of-service_attack
+    send(IP(src=host, dst=host)/TCP(sport=135,dport=135))
+ 	   
+Это достаточно старые уязвимости или классические атаки, к которым больше не восприимчивы все современные операционные системы. Для нашего хоста Ubuntu 14.04 никакая из предыдущих атак не приводит к его падению. Однако, при обнаружении дополнительных проблем безопасности, Scapy является великолепным инструментом для того, чтобы начать проверку вашей собственной сетевой среды без необходимости ожидания вмешательства производителя с предоставлением вам неких средств проверки. Это в особенности верно для атак нулевого дня (появления без предварительного уведомления), которые всё чаще и чаще встречаются во всемирном Интернете.
+
